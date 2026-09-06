@@ -4,3 +4,12 @@
 venv/
 __pycache__/
 *.pyc
+*.db
+*.db-*
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.log
+.local/
