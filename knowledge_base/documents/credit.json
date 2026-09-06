@@ -1,0 +1,9 @@
+{
+  "document_id": "credit",
+  "title": "Credit card limits",
+  "policy_type": "credit",
+  "effective_date": "2026-09-01",
+  "version": "1.0",
+  "access_level": "customer",
+  "text": "Credit limit increase requests require confirmation and step-up verification. Requests between INR 1,000 and INR 500,000 are sent to a human for review. Submission is not approval."
+}

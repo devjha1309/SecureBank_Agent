@@ -1,0 +1,9 @@
+{
+  "document_id": "disputes",
+  "title": "Transaction disputes",
+  "policy_type": "disputes",
+  "effective_date": "2026-09-01",
+  "version": "1.0",
+  "access_level": "customer",
+  "text": "Report a suspicious transaction promptly. The assistant can submit a dispute after confirmation and step-up verification. A specialist investigates the transaction; the assistant cannot determine fraud or guarantee refunds."
+}

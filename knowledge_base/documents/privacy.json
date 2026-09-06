@@ -1,0 +1,9 @@
+{
+  "document_id": "privacy",
+  "title": "Privacy policy",
+  "policy_type": "privacy",
+  "effective_date": "2026-09-01",
+  "version": "1.0",
+  "access_level": "customer",
+  "text": "Only synthetic customer data is used. Secrets and codes must not be sent in chat. Sanitized conversations are retained for at most 24 hours. External model processing is disabled by default."
+}

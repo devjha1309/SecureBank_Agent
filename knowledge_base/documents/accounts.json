@@ -1,0 +1,9 @@
+{
+  "document_id": "accounts",
+  "title": "Account policy",
+  "policy_type": "accounts",
+  "effective_date": "2026-09-01",
+  "version": "1.0",
+  "access_level": "customer",
+  "text": "Savings and current accounts are synthetic demonstration products. Account ownership is verified for every request. Available balance can differ from current balance when funds are on hold."
+}

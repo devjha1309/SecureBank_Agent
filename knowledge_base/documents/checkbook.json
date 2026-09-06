@@ -1,0 +1,9 @@
+{
+  "document_id": "checkbook",
+  "title": "Checkbook policy",
+  "policy_type": "checkbook",
+  "effective_date": "2026-09-01",
+  "version": "1.0",
+  "access_level": "customer",
+  "text": "A checkbook request is free in this synthetic bank. Delivery is to the registered address only. Requests require explicit confirmation and step-up verification. Expected delivery is 5 to 7 working days."
+}

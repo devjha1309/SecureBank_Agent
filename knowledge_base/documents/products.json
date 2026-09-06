@@ -1,0 +1,9 @@
+{
+  "document_id": "products",
+  "title": "Banking products",
+  "policy_type": "products",
+  "effective_date": "2026-09-01",
+  "version": "1.0",
+  "access_level": "customer",
+  "text": "SecureBank offers synthetic savings accounts, current accounts, and credit cards. No real accounts can be opened and no money transfers are supported."
+}

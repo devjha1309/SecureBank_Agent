@@ -1,0 +1,9 @@
+{
+  "document_id": "faq",
+  "title": "Customer support FAQ",
+  "policy_type": "faq",
+  "effective_date": "2026-09-01",
+  "version": "1.0",
+  "access_level": "customer",
+  "text": "For unsupported requests ask for human support. A service-request reference allows you to check the status of your own request. Statements are CSV downloads with a five-minute expiry."
+}
