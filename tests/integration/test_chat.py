@@ -97,3 +97,25 @@ def test_tool_failure_never_invents_balance(chat_bank, monkeypatch):
     r = c.post("/chat", headers=a, json={"message": "Show my balance", "account_id": aid})
     assert r.status_code == 200, r.text
     assert "₹" not in r.json()["response"] and "cannot verify" in r.json()["response"]
+
+
+def test_history_restores_owned_proposal_and_order(chat_bank):
+    c, _, a, b, aid, _ = chat_bank
+    r = c.post("/chat", headers=a, json={"message": "Request a checkbook", "account_id": aid}).json()
+    sid = r["session_id"]
+    restored = c.get(f"/chat/{sid}/history", headers=a).json()
+    assert restored["selected_account_id"] == aid
+    assert restored["pending_action"]["action_id"] == r["pending_action"]["action_id"]
+    assert [m["role"] for m in restored["messages"]] == ["user", "assistant"]
+    assert c.get(f"/chat/{sid}/history", headers=b).status_code == 404
+
+
+def test_expired_proposal_can_be_cleared(chat_bank):
+    from mock_bank.models.entities import PendingAction
+
+    c, f, a, _, aid, _ = chat_bank
+    data = c.post("/chat", headers=a, json={"message": "Request a checkbook", "account_id": aid}).json()
+    with f.begin() as db:
+        db.get(PendingAction, data["pending_action"]["action_id"]).expires_at = 1
+    assert c.post(f"/chat/{data['session_id']}/confirm", headers=a).status_code == 409
+    assert c.delete(f"/chat/{data['session_id']}", headers=a).status_code == 200

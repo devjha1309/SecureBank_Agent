@@ -28,3 +28,4 @@ prometheus-client==0.26.0
 opentelemetry-sdk==1.44.0
 opentelemetry-exporter-otlp==1.44.0
 typing-extensions==4.16.0
+uuid-utils==0.17.0

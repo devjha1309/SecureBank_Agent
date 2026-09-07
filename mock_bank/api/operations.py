@@ -116,12 +116,14 @@ def action_view(action: PendingAction) -> dict:
     }
 
 
-def owned_action(db: Session, auth: AuthContext, action_id: str) -> PendingAction:
+def owned_action(
+    db: Session, auth: AuthContext, action_id: str, *, allow_expired: bool = False
+) -> PendingAction:
     action = db.scalar(select(PendingAction).where(PendingAction.id == action_id).with_for_update())
     if not action or action.customer_id != auth.customer_id or action.auth_session_id != auth.session_id:
         raise BankError("RESOURCE_NOT_FOUND", "The proposed action is not available.", 404)
     own_account(db, auth, action.account_id, ACTION_PERMISSIONS[action.kind])
-    if action.expires_at <= now() and action.status != "submitted":
+    if action.expires_at <= now() and action.status != "submitted" and not allow_expired:
         raise BankError("ACTION_EXPIRED", "This proposal expired. Please prepare a new request.", 409)
     return action
 
@@ -193,7 +195,7 @@ def verify_otp(db: Session, auth: AuthContext, action_id: str, code: str) -> dic
 
 
 def cancel(db: Session, auth: AuthContext, action_id: str) -> dict:
-    action = owned_action(db, auth, action_id)
+    action = owned_action(db, auth, action_id, allow_expired=True)
     if action.status == "submitted":
         raise BankError("ALREADY_SUBMITTED", "This request has already been submitted.", 409)
     claim = db.execute(

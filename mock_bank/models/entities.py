@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from uuid_utils import uuid7
 
 
 def uid() -> str:
@@ -151,7 +152,7 @@ class ChatSession(Base):
 
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
-    id: Mapped[str] = mapped_column(primary_key=True, default=uid)
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid7().hex)
     session_id: Mapped[str] = mapped_column(ForeignKey("chat_sessions.id"))
     role: Mapped[str]
     content: Mapped[str]

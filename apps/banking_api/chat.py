@@ -219,14 +219,23 @@ async def chat_stream(data: ChatInput, request: Request, auth: Auth, db: DB):
 
 @router.get("/chat/{session_id}/history")
 def history(session_id: str, auth: Auth, db: DB):
-    owned_chat(db, auth, session_id)
+    chat = owned_chat(db, auth, session_id)
     messages = db.scalars(
         select(ChatMessage)
         .where(ChatMessage.session_id == session_id)
         .order_by(ChatMessage.created_at, ChatMessage.id)
         .limit(100)
     )
-    return {"messages": [{"role": m.role, "content": m.content} for m in messages]}
+    pending = (
+        op.owned_action(db, auth, chat.pending_action_id, allow_expired=True)
+        if chat.pending_action_id
+        else None
+    )
+    return {
+        "messages": [{"role": m.role, "content": m.content} for m in messages],
+        "selected_account_id": chat.selected_account_id,
+        "pending_action": op.action_view(pending) if pending else None,
+    }
 
 
 @router.post("/chat/{session_id}/confirm")
