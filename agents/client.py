@@ -34,7 +34,7 @@ async def call_tool(agent: str, name: str, args: dict) -> ToolResult:
                             raise ValueError("invalid result content")
                         validated_result = ToolResult.model_validate_json(result.content[0].text)
                         if validated_result.ok:
-                            validate_output(name, validated_result.data)
+                            validated_result.data = validate_output(name, validated_result.data)
                         return validated_result
     except Exception:
         raise BankError(

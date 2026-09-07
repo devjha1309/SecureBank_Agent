@@ -3,6 +3,7 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from weakref import WeakValueDictionary
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
@@ -23,7 +24,7 @@ from mock_bank.api.schemas import ChatInput, StrictModel
 from mock_bank.models.entities import ChatMessage, ChatSession, SecurityAuditLog, now
 
 router = APIRouter()
-locks: dict[str, asyncio.Lock] = {}
+locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 
 
 class ChatOTP(StrictModel):
@@ -33,7 +34,9 @@ class ChatOTP(StrictModel):
 @asynccontextmanager
 async def session_lock(session_id):
     if store.redis:
-        lock = store.redis.lock("chat-lock:" + session_id, timeout=90, blocking_timeout=0)
+        lock = store.redis.lock(
+            "chat-lock:" + session_id, timeout=180, blocking_timeout=0, thread_local=False
+        )
         if not await asyncio.to_thread(lock.acquire, blocking=False):
             raise BankError("SESSION_BUSY", "Another request is running. Please wait.", 409)
         try:

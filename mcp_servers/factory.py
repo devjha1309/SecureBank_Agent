@@ -9,7 +9,7 @@ from starlette.responses import JSONResponse
 
 from core.config.settings import get_settings
 from core.errors import SafeError
-from core.observability.telemetry import FAILURES, TOOLS
+from core.observability.telemetry import FAILURES, TOOLS, tracer
 from mcp_servers.contracts import TOOLS as SPECS
 from mcp_servers.contracts import ToolResult, validate_output
 
@@ -19,6 +19,8 @@ async def execute_tool(
 ) -> ToolResult:
     spec = SPECS[name]
     started = monotonic()
+    span = tracer.start_span("mcp.tool")
+    span.set_attribute("tool.name", name)
 
     async def execute(c):
         args = spec.schema.model_validate(arguments).model_dump()
@@ -79,6 +81,7 @@ async def execute_tool(
             ),
         )
     finally:
+        span.end()
         TOOLS.labels(name).observe(monotonic() - started)
 
 

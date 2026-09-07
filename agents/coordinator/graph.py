@@ -19,7 +19,7 @@ from core.config.settings import get_settings
 from core.errors import BankError
 from core.guardrails.input import validate_message
 from core.model_router.router import classify
-from core.observability.telemetry import AGENTS, COMPLETED, model_usage
+from core.observability.telemetry import AGENTS, COMPLETED, model_usage, tracer
 from core.pii.redaction import redact
 from mcp_servers.contracts import TOOLS
 
@@ -435,10 +435,15 @@ class Coordinator:
         records: list = []
         usage_token = model_usage.set(records)
         try:
-            with AGENTS.time():
+            with (
+                AGENTS.time(),
+                tracer.start_as_current_span("coordinator.run", record_exception=False) as span,
+            ):
                 result = await self.graph.ainvoke(
                     Command(resume=resume) if resume is not None else state, config
                 )
+                span.set_attribute("agent.intents", result.get("detected_intents", []))
+                span.set_attribute("agent.selected", result.get("selected_agents", []))
             result["model_usage"] = records
             return result
         finally:

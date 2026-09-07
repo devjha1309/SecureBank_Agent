@@ -59,7 +59,10 @@ def main():
                 ]
             )
         )
-        print("SecureBank: http://127.0.0.1:8000/assistant — synthetic demo only", flush=True)
+        print(
+            f"SecureBank: http://127.0.0.1:{os.environ.get('PORT', '8000')}/assistant — synthetic demo only",
+            flush=True,
+        )
         processes[-1].wait()
     finally:
         stop()

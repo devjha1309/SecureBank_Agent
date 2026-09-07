@@ -80,7 +80,7 @@ class ToolSpec:
 
     @property
     def write(self) -> bool:
-        return self.method == "POST"
+        return self.method == "POST" and self.path != "/transactions/search"
 
 
 TOOLS = {
@@ -290,4 +290,63 @@ def validate_output(name: str, data: dict) -> dict:
     schema = OUTPUTS.get(name)
     if schema:
         data = schema.model_validate(data).model_dump()
-    return data
+    from core.guardrails.input import validate_message
+    from core.pii.redaction import redact
+
+    def sanitize(value):
+        if isinstance(value, dict):
+            return {
+                key: redact(item)
+                if key in {"description", "text", "title", "summary"} and isinstance(item, str)
+                else sanitize(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [sanitize(item) for item in value]
+        return value
+
+    def inspect(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in {"description", "text", "title"} and isinstance(item, str):
+                    validate_message(item)
+                else:
+                    inspect(item)
+        elif isinstance(value, list):
+            for item in value:
+                inspect(item)
+
+    inspect(data)
+    return sanitize(data)
+
+
+class PolicyOutput(StrictModel):
+    document_id: str
+    title: str
+    policy_type: str
+    effective_date: str
+    version: str
+    access_level: Literal["customer", "public"]
+    text: str
+
+
+class SourceOutput(PolicyOutput):
+    section: str
+    score: float
+
+
+class KnowledgeOutput(StrictModel):
+    sources: list[SourceOutput]
+
+
+class ProductsOutput(StrictModel):
+    products: list[str]
+
+
+OUTPUTS.update(
+    {
+        "search_bank_policies": KnowledgeOutput,
+        "get_policy_details": PolicyOutput,
+        "list_bank_products": ProductsOutput,
+    }
+)

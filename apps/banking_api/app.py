@@ -11,10 +11,13 @@ from fastapi import Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import OAuth2PasswordRequestForm
+from opentelemetry import context as otel_context
+from opentelemetry import trace as otel_trace
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from core.auth.security import AuthContext, current_auth, digest, hasher, token_pair, verify_password
 from core.authorization.policy import own_account, require
@@ -27,6 +30,7 @@ from core.observability.telemetry import (
     audit,
     configure_tracing,
     trace_id,
+    tracer,
 )
 from mock_bank.api import operations as op
 from mock_bank.api.schemas import (
@@ -85,6 +89,7 @@ async def request_audit(request: Request, db: DB):
         raise
     finally:
         if auth:
+            otel_trace.get_current_span().set_attribute("customer.hash", customer_hash(auth.customer_id))
             route = getattr(request.scope.get("route"), "path", "unknown")
             audit(db, auth, request.method + " " + route, status, int((time.monotonic() - started) * 1000))
             if status == "failed":
@@ -110,6 +115,9 @@ app = FastAPI(
 async def security_boundary(request: Request, call_next):
     started = time.monotonic()
     token = trace_id.set(uuid4().hex)
+    span = tracer.start_span("banking.request")
+    context_token = otel_context.attach(otel_trace.set_span_in_context(span))
+    span.set_attribute("request.id", trace_id.get())
     try:
         store.rate("edge:" + (request.client.host if request.client else "unknown"), 600)
         if request.url.path.startswith("/assistant"):
@@ -130,12 +138,16 @@ async def security_boundary(request: Request, call_next):
         response.headers["Cache-Control"] = "no-store"
         route = request.scope.get("route")
         label = getattr(route, "path", "unmatched")
+        span.set_attribute("http.route", label)
+        span.set_attribute("http.response.status_code", response.status_code)
         REQUESTS.labels(label, str(response.status_code)).inc()
         LATENCY.labels(label).observe(time.monotonic() - started)
         return response
     except BankError as exc:
         return JSONResponse(exc.payload.model_dump(), status_code=exc.status)
     finally:
+        span.end()
+        otel_context.detach(context_token)
         trace_id.reset(token)
 
 
@@ -145,6 +157,20 @@ async def safe_error(request: Request, exc: BankError):
     if exc.status in (401, 403, 404, 429):
         SECURITY.labels(exc.payload.error_code).inc()
     return JSONResponse(exc.payload.model_dump(), status_code=exc.status)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error(request: Request, exc: StarletteHTTPException):
+    return await safe_error(
+        request,
+        BankError(
+            "HTTP_ERROR",
+            "The requested endpoint is unavailable."
+            if exc.status_code == 404
+            else "This request could not be accepted.",
+            exc.status_code,
+        ),
+    )
 
 
 @app.exception_handler(RequestValidationError)

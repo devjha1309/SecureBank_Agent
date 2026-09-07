@@ -117,9 +117,11 @@ async def classify(message: str, sensitive: bool = False) -> IntentPlan:
     provider = settings.model_provider
     name = settings.local_model_name
     # Sensitive context always stays local; external routing is opt-in only.
-    if sensitive or not settings.allow_external_llm:
+    complex_request = len(message) > 300 or len(deterministic_plan(message).intents) > 2
+    if sensitive or not settings.allow_external_llm or not complex_request:
         provider = settings.local_model_provider
     elif provider not in ("mock", "ollama"):
+        provider = settings.external_model_provider or provider
         name = settings.external_model_name
     try:
         started = monotonic()
