@@ -1,0 +1,22 @@
+:root {--bank-ink:#123047;--bank-teal:#087f8c;--bank-paper:#f5f8fb;}
+.gradio-container {max-width:1200px!important; margin:auto!important; background:var(--bank-paper)!important;}
+#brand {background:linear-gradient(110deg,#102e45,#126777); padding:28px 32px; border-radius:18px; color:white; margin:16px 0;}
+#brand h1,#brand p {color:white!important; margin:4px 0!important;}
+#brand h1 {font-size:30px!important; letter-spacing:-.6px;}
+#login-card {max-width:540px; margin:28px auto; padding:24px; border:1px solid #dfe8ee; border-radius:16px; background:white;}
+#security-banner {font-size:12px; color:#536a79;}
+#account-card,#action-card {border:1px solid #dfe8ee; border-radius:14px; padding:14px; background:white;}
+#chat-window {border-radius:14px; border:1px solid #dfe8ee;}
+#activity {color:#087f8c; font-size:13px;}
+footer {display:none!important;}
+@media(max-width:700px){#brand{padding:20px;} #brand h1{font-size:24px!important;} .gradio-container{padding:12px!important;}}
+.gradio-container {width:100%!important; min-width:0!important; box-sizing:border-box!important;}
+.gradio-container .main, .gradio-container .wrap, .gradio-container main {min-width:0!important; max-width:100%!important; box-sizing:border-box!important;}
+.gradio-container .prose {overflow-wrap:anywhere;}
+@media(max-width:700px){
+  .gradio-container .row {flex-direction:column!important; min-width:0!important;}
+  .gradio-container .row > .column {min-width:0!important; width:100%!important; flex-basis:auto!important;}
+  .gradio-container .main {padding:0!important;}
+  .gradio-container .block {min-width:0!important; max-width:100%!important;}
+  #account-card {width:100%!important;}
+}
