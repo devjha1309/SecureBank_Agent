@@ -12,12 +12,23 @@ def main():
     artifacts.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={"width": 1440, "height": 1050})
+        page = browser.new_page(viewport={"width": 1440, "height": 1050}, color_scheme="dark")
         page.goto(base + "/assistant", wait_until="domcontentloaded")
         page.get_by_label("Password", exact=True).fill("SyntheticDemo!42")
         page.get_by_role("button", name="Sign in securely", exact=True).click()
         page.get_by_text("Welcome, Demo1", exact=False).wait_for(timeout=30000)
         assert "securebank_ui" not in page.evaluate("document.cookie")
+        # OS dark mode must not introduce pale text on the app's light cards.
+        for scheme in ("light", "dark"):
+            page.emulate_media(color_scheme=scheme)
+            page.get_by_text("Quick actions", exact=True).click()
+            button = page.get_by_role("button", name="Check my balance", exact=True)
+            assert button.evaluate("el => getComputedStyle(el).color") != "rgb(255, 255, 255)"
+            assert page.locator("#customer-profile h3").evaluate("el => getComputedStyle(el).color") not in (
+                "rgb(255, 255, 255)",
+                "rgb(241, 245, 249)",
+            )
+            page.get_by_text("Quick actions", exact=True).click()
         assert not page.locator("#action-card").is_visible()
         assert not page.locator("#transaction-panel").is_visible()
         page.set_viewport_size({"width": 390, "height": 844})

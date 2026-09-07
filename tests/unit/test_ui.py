@@ -60,3 +60,12 @@ def test_transient_ui_error_preserves_pending_panels():
     assert result[2] == {"__type__": "update"}
     assert result[6] == {"__type__": "update"}
     assert result[9] == {"__type__": "update"}
+
+
+def test_banking_theme_keeps_dark_mode_tokens_consistent():
+    from apps.gradio_ui.app import banking_theme
+
+    values = banking_theme().to_dict()["theme"]
+    for key, value in values.items():
+        if key.endswith("_dark"):
+            assert value == values[key[:-5]], key

@@ -67,8 +67,18 @@ async def bootstrap(request: gr.Request):
         return (
             gr.update(visible=False),
             gr.update(visible=True),
-            f"### Welcome, {profile['first_name']}\n{profile['membership'].title()} membership · {profile['masked_customer_id']} · Signed in",
-            gr.update(choices=options, value=selected),
+            f"### Welcome, {profile['first_name']}\n{profile['membership'].title()} membership · {profile['masked_customer_id']} · Signed in"
+            + (
+                "\n\nThis employee login has no personal accounts. Use a customer demo (demo01–demo10) for balances and banking requests."
+                if not options
+                else ""
+            ),
+            gr.update(
+                choices=options,
+                value=selected,
+                interactive=bool(options),
+                label="Select an account" if options else "No personal accounts for this role",
+            ),
             restored.get("messages", []),
             *proposal_controls(restored.get("pending_action")),
         )
@@ -268,6 +278,24 @@ async def clear(request: gr.Request):
         )
     except BankError as exc:
         raise gr.Error(exc.payload.safe_message) from None
+
+
+def banking_theme():
+    """Keep the banking palette consistent with the app’s light surfaces in either OS mode."""
+    theme = gr.themes.Soft(
+        primary_hue="teal",
+        neutral_hue="slate",
+        font=["system-ui", "sans-serif"],
+        font_mono=["ui-monospace", "monospace"],
+    ).set(
+        block_label_background_fill="transparent",
+        block_label_text_color="#5d6d7b",
+        block_background_fill="white",
+        button_primary_background_fill="#0b756d",
+        button_primary_background_fill_hover="#095f59",
+    )
+    values = theme.to_dict()["theme"]
+    return theme.set(**{key: values[key[:-5]] for key in values if key.endswith("_dark")})
 
 
 def create_gradio_app():
@@ -506,18 +534,7 @@ def mount_ui(app):
         app,
         ui,
         path="/assistant",
-        theme=gr.themes.Soft(
-            primary_hue="teal",
-            neutral_hue="slate",
-            font=["system-ui", "sans-serif"],
-            font_mono=["ui-monospace", "monospace"],
-        ).set(
-            block_label_background_fill="transparent",
-            block_label_text_color="#5d6d7b",
-            block_background_fill="white",
-            button_primary_background_fill="#0b756d",
-            button_primary_background_fill_hover="#095f59",
-        ),
+        theme=banking_theme(),
         css=css,
         show_error=False,
         allowed_paths=[],
