@@ -11,7 +11,7 @@ from core.config.settings import get_settings
 from core.errors import SafeError
 from core.observability.telemetry import FAILURES, TOOLS
 from mcp_servers.contracts import TOOLS as SPECS
-from mcp_servers.contracts import ToolResult
+from mcp_servers.contracts import ToolResult, validate_output
 
 
 async def execute_tool(
@@ -57,7 +57,7 @@ async def execute_tool(
         assert response is not None
         if response.status_code >= 400:
             return ToolResult(ok=False, error=SafeError.model_validate(response.json()))
-        return ToolResult(ok=True, data=response.json())
+        return ToolResult(ok=True, data=validate_output(name, response.json()))
 
     try:
         async with asyncio.timeout(12):
@@ -103,6 +103,13 @@ def create_server(group: str):
     @server.custom_route("/health", methods=["GET"])
     async def health(request):
         return JSONResponse({"status": "ok", "service": group})
+
+    @server.custom_route("/metrics", methods=["GET"])
+    async def metrics(request):
+        from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+        from starlette.responses import Response
+
+        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     return server.streamable_http_app(
         stateless_http=True, json_response=True, host="0.0.0.0", max_request_body_size=16384

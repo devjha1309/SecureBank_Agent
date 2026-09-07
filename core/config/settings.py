@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     external_model_provider: str = ""
     external_model_name: str = ""
     allow_external_llm: bool = False
+    model_input_usd_per_million: float | None = None
+    model_output_usd_per_million: float | None = None
     ollama_base_url: str = "http://localhost:11434"
     banking_api_url: str = "http://127.0.0.1:8000"
     accounts_mcp_url: str = "http://127.0.0.1:8101/mcp"

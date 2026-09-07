@@ -181,7 +181,13 @@ def verify_otp(db: Session, auth: AuthContext, action_id: str, code: str) -> dic
             "OTP_INVALID", f"Incorrect code. {max(0, 3 - challenge.attempts)} attempts remain.", 400
         )
     challenge.verified = True
-    action.status = "verified"
+    claim = db.execute(
+        update(PendingAction)
+        .where(PendingAction.id == action.id, PendingAction.status == "confirmed")
+        .values(status="verified")
+    )
+    if getattr(claim, "rowcount", 0) != 1:
+        raise BankError("ACTION_CONFLICT", "The proposal changed during verification.", 409)
     audit(db, auth, "verify_step_up", "verified")
     return {"status": "verified"}
 
@@ -190,7 +196,16 @@ def cancel(db: Session, auth: AuthContext, action_id: str) -> dict:
     action = owned_action(db, auth, action_id)
     if action.status == "submitted":
         raise BankError("ALREADY_SUBMITTED", "This request has already been submitted.", 409)
-    action.status = "cancelled"
+    claim = db.execute(
+        update(PendingAction)
+        .where(
+            PendingAction.id == action.id,
+            PendingAction.status.in_(["prepared", "confirmed", "verified", "cancelled"]),
+        )
+        .values(status="cancelled")
+    )
+    if getattr(claim, "rowcount", 0) != 1:
+        raise BankError("ALREADY_SUBMITTED", "This request has already been submitted.", 409)
     audit(db, auth, "cancel_action", "cancelled")
     return {"status": "cancelled"}
 

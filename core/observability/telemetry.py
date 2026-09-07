@@ -49,3 +49,12 @@ def configure_tracing() -> None:
         provider = TracerProvider()
         provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint + "/v1/traces")))
         trace.set_tracer_provider(provider)
+
+
+model_usage: ContextVar[list | None] = ContextVar("model_usage", default=None)
+
+
+def record_model_usage(records: list) -> None:
+    current = model_usage.get()
+    if current is not None:
+        current.extend(records)

@@ -58,9 +58,52 @@ Auth = Annotated[AuthContext, Depends(current_auth)]
 async def lifespan(app: FastAPI):
     configure_tracing()
     yield
+    from agents.coordinator.graph import coordinator
+
+    await coordinator.close()
 
 
-app = FastAPI(title="SecureBank Agent — synthetic development banking", version="0.2.0", lifespan=lifespan)
+async def request_audit(request: Request, db: DB):
+    from core.auth.security import authenticate
+    from core.observability.telemetry import customer_hash
+    from mock_bank.models.entities import SecurityAuditLog
+
+    authorization = request.headers.get("authorization", "")
+    auth = None
+    if authorization.startswith("Bearer "):
+        try:
+            auth = authenticate(authorization[7:], db)
+        except BankError:
+            pass
+    started = time.monotonic()
+    status = "success"
+    try:
+        yield
+    except Exception:
+        status = "failed"
+        db.rollback()
+        raise
+    finally:
+        if auth:
+            route = getattr(request.scope.get("route"), "path", "unknown")
+            audit(db, auth, request.method + " " + route, status, int((time.monotonic() - started) * 1000))
+            if status == "failed":
+                db.add(
+                    SecurityAuditLog(
+                        trace_id=trace_id.get(),
+                        customer_hash=customer_hash(auth.customer_id),
+                        event="request_denied_or_failed",
+                    )
+                )
+            db.commit()
+
+
+app = FastAPI(
+    title="SecureBank Agent — synthetic development banking",
+    version="0.2.0",
+    lifespan=lifespan,
+    dependencies=[Depends(request_audit)],
+)
 
 
 @app.middleware("http")
@@ -68,6 +111,7 @@ async def security_boundary(request: Request, call_next):
     started = time.monotonic()
     token = trace_id.set(uuid4().hex)
     try:
+        store.rate("edge:" + (request.client.host if request.client else "unknown"), 600)
         if request.url.path.startswith("/assistant"):
             response = await call_next(request)
         else:
@@ -396,3 +440,29 @@ def preferences(data: PreferenceInput, auth: Auth, db: DB):
     customer.preferences = data.model_dump(exclude={"approved"})
     db.commit()
     return customer.preferences
+
+
+@app.get("/knowledge/search")
+def knowledge_search(auth: Auth, q: str = "", query: str = ""):
+    require(auth, "knowledge:read")
+    from knowledge_base.ingestion.store import search
+
+    return {"sources": search((query or q)[:500])}
+
+
+@app.get("/knowledge/policies/{policy_id}")
+def policy(policy_id: str, auth: Auth):
+    require(auth, "knowledge:read")
+    import json
+
+    from knowledge_base.ingestion.store import ROOT
+
+    if policy_id not in {"accounts", "checkbook", "credit", "disputes", "fees", "products", "faq", "privacy"}:
+        raise BankError("RESOURCE_NOT_FOUND", "This policy is not available.", 404)
+    return json.loads((ROOT / "documents" / f"{policy_id}.json").read_text())
+
+
+@app.get("/knowledge/products")
+def products(auth: Auth):
+    require(auth, "knowledge:read")
+    return {"products": ["Synthetic Savings", "Synthetic Current", "Synthetic Credit Card"]}

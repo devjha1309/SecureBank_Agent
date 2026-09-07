@@ -16,6 +16,10 @@ from mock_bank.seed_data import seed as seed_module
 
 @pytest.fixture
 def bank(tmp_path, monkeypatch):
+    from core.memory.store import store
+
+    monkeypatch.setattr(store, "redis", None)
+    store.data.clear()
     engine = create_engine(f"sqlite:///{tmp_path}/test.db", connect_args={"check_same_thread": False})
     Base.metadata.create_all(engine)
     factory = sessionmaker(engine, expire_on_commit=False)

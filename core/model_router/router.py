@@ -2,13 +2,14 @@
 
 import asyncio
 import re
+from time import monotonic
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.config.settings import get_settings
 from core.errors import BankError
-from core.observability.telemetry import MODEL_LATENCY
+from core.observability.telemetry import COST, MODEL_LATENCY, TOKENS, record_model_usage, tracer
 from core.pii.redaction import redact
 
 Intent = Literal[
@@ -100,7 +101,7 @@ def build_model(provider: str, name: str):
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
-        return ChatAnthropic(model_name=name, temperature=0, timeout=10, max_retries=0)
+        return ChatAnthropic(model_name=name, temperature=0, timeout=10, max_retries=0, stop=None)
     if provider == "bedrock":
         from langchain_aws import ChatBedrockConverse
 
@@ -111,6 +112,7 @@ def build_model(provider: str, name: str):
 async def classify(message: str, sensitive: bool = False) -> IntentPlan:
     settings = get_settings()
     if settings.model_provider == "mock":
+        record_model_usage([{"provider": "mock", "tokens": 0, "cost_microusd": 0, "latency_ms": 0}])
         return deterministic_plan(message)
     provider = settings.model_provider
     name = settings.local_model_name
@@ -120,16 +122,44 @@ async def classify(message: str, sensitive: bool = False) -> IntentPlan:
     elif provider not in ("mock", "ollama"):
         name = settings.external_model_name
     try:
-        with MODEL_LATENCY.labels(provider).time():
+        started = monotonic()
+        with (
+            MODEL_LATENCY.labels(provider).time(),
+            tracer.start_as_current_span("model.classify", record_exception=False) as span,
+        ):
+            span.set_attribute("model.provider", provider)
             async with asyncio.timeout(12):
                 from pathlib import Path
 
                 prompt = (Path(__file__).with_name("routing_prompt.txt")).read_text()
                 model = build_model(provider, name)
-                result = await model.with_structured_output(IntentPlan).ainvoke(
+                result = await model.with_structured_output(IntentPlan, include_raw=True).ainvoke(
                     [("system", prompt), ("human", redact(message))]
                 )
-                return IntentPlan.model_validate(result)
+                usage = getattr(result["raw"], "usage_metadata", None) or {}
+                tokens = int(usage.get("total_tokens", 0))
+                TOKENS.labels(provider).inc(tokens)
+                estimate = -1
+                if (
+                    settings.model_input_usd_per_million is not None
+                    and settings.model_output_usd_per_million is not None
+                ):
+                    estimate = int(
+                        usage.get("input_tokens", 0) * settings.model_input_usd_per_million
+                        + usage.get("output_tokens", 0) * settings.model_output_usd_per_million
+                    )
+                    COST.labels(provider).inc(estimate / 1_000_000)
+                record_model_usage(
+                    [
+                        {
+                            "provider": provider,
+                            "tokens": tokens,
+                            "cost_microusd": estimate,
+                            "latency_ms": int((monotonic() - started) * 1000),
+                        }
+                    ]
+                )
+                return IntentPlan.model_validate(result["parsed"])
     except Exception:
         raise BankError(
             "MODEL_UNAVAILABLE",

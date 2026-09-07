@@ -1,6 +1,7 @@
 """Shared public tool contracts. No credentials or customer identity in arguments."""
 
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import Field
 
@@ -215,3 +216,78 @@ TOOLS = {
         "knowledge", "knowledge:read", "GET", "/knowledge/products", Empty, "List synthetic banking products."
     ),
 }
+
+
+class AccountOutput(StrictModel):
+    account_id: str
+    masked_account: str = Field(pattern=r"^•••• \d{4}$")
+    kind: Literal["savings", "current"]
+    currency: Literal["INR"]
+
+
+class BalanceOutput(AccountOutput):
+    current_paise: int
+    available_paise: int
+
+
+class AccountsOutput(StrictModel):
+    accounts: list[AccountOutput]
+
+
+class TransactionOutput(StrictModel):
+    transaction_id: str
+    date: str
+    description: str
+    amount_paise: int
+    type: Literal["credit", "debit"]
+    masked_reference: str = Field(pattern=r"^••••[a-z0-9]{4}$")
+    status: Literal["posted", "pending", "reversed"]
+    currency: Literal["INR"]
+
+
+class TransactionsOutput(StrictModel):
+    transactions: list[TransactionOutput]
+
+
+class ActionOutput(StrictModel):
+    action_id: str
+    kind: Literal["checkbook", "credit_limit", "suspicious_transaction"]
+    summary: str
+    status: Literal["prepared", "confirmed", "verified", "submitted", "cancelled"]
+    expires_at: int
+
+
+class StatusOutput(StrictModel):
+    reference: str = Field(pattern=r"^SR-[A-Z0-9]{12}$")
+    status: Literal["submitted", "in_review", "completed", "rejected"]
+    kind: Literal["checkbook", "credit_limit", "suspicious_transaction"]
+
+
+class StatementOutput(StrictModel):
+    download_reference: str = Field(pattern=r"^[a-f0-9]{32}$")
+    download_url: str = Field(pattern=r"^/statements/[a-f0-9]{32}/download$")
+    expires_in: int
+
+
+OUTPUTS: dict[str, type[StrictModel]] = {
+    "list_customer_accounts": AccountsOutput,
+    "get_account_details": AccountOutput,
+    "get_account_balance": BalanceOutput,
+    "get_recent_transactions": TransactionsOutput,
+    "search_transactions": TransactionsOutput,
+    "get_transaction_details": TransactionOutput,
+    "generate_account_statement": StatementOutput,
+    "get_service_request_status": StatusOutput,
+}
+for _name in TOOLS:
+    if _name.startswith("prepare_"):
+        OUTPUTS[_name] = ActionOutput
+    if _name.startswith("submit_"):
+        OUTPUTS[_name] = StatusOutput
+
+
+def validate_output(name: str, data: dict) -> dict:
+    schema = OUTPUTS.get(name)
+    if schema:
+        data = schema.model_validate(data).model_dump()
+    return data
