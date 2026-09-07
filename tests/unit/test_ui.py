@@ -34,3 +34,29 @@ def test_cookie_is_httponly(monkeypatch):
 def test_missing_ui_session_fails():
     with pytest.raises(BankError):
         bff.get_session({})
+
+
+def test_confirmation_controls_only_enable_a_current_prepared_proposal():
+    import time
+
+    from apps.gradio_ui.app import proposal_controls
+
+    assert proposal_controls(None)[1]["visible"] is False
+    pending = {"summary": "Synthetic checkbook request", "status": "prepared", "expires_at": time.time() + 60}
+    controls = proposal_controls(pending)
+    assert controls[1]["visible"] and controls[2]["interactive"]
+    pending["status"] = "confirmed"
+    assert not proposal_controls(pending)[2]["interactive"]
+    assert proposal_controls(pending)[3]["visible"]
+    pending["expires_at"] = 1
+    assert not proposal_controls(pending)[2]["interactive"]
+    assert "expired" in proposal_controls(pending)[0]
+
+
+def test_transient_ui_error_preserves_pending_panels():
+    from apps.gradio_ui.app import transient
+
+    result = transient([], "Unavailable")
+    assert result[2] == {"__type__": "update"}
+    assert result[6] == {"__type__": "update"}
+    assert result[9] == {"__type__": "update"}

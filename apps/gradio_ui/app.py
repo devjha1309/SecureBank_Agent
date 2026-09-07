@@ -1,6 +1,7 @@
-"""Gradio display layer. All banking and authentication actions call FastAPI."""
+"""Gradio display layer. Banking decisions remain in the authenticated backend."""
 
 import json
+import time
 from pathlib import Path
 
 import gradio as gr
@@ -18,6 +19,23 @@ def cookies(request: gr.Request):
     return request.cookies
 
 
+def proposal_controls(pending):
+    expired = bool(pending and pending["expires_at"] <= time.time())
+    status = pending["status"] if pending else ""
+    summary = pending["summary"] if pending else ""
+    if expired:
+        summary += "\n\nThis proposal has expired. Cancel it to start a new request."
+    return (
+        summary,
+        gr.update(visible=bool(pending)),
+        gr.update(interactive=bool(pending and status == "prepared" and not expired)),
+        gr.update(visible=bool(pending and status in ("confirmed", "verified") and not expired)),
+        "Enter your development verification code below."
+        if pending and status in ("confirmed", "verified") and not expired
+        else "",
+    )
+
+
 async def bootstrap(request: gr.Request):
     try:
         profile = (await bff.api(cookies(request), "GET", "/auth/me")).json()
@@ -28,16 +46,41 @@ async def bootstrap(request: gr.Request):
             accounts = []
         mapping = {a["kind"].title() + " · " + a["masked_account"]: a["account_id"] for a in accounts}
         session["account_map"] = mapping
+        restored = {}
+        if session["chat_id"]:
+            try:
+                restored = (
+                    await bff.api(cookies(request), "GET", f"/chat/{session['chat_id']}/history")
+                ).json()
+            except BankError as exc:
+                if exc.status == 404:
+                    session["chat_id"] = None
+                else:
+                    raise
         bff.save(key, session)
         options = list(mapping)
+        selected = next(
+            (label for label, ref in mapping.items() if ref == restored.get("selected_account_id")), None
+        )
+        if selected is None and len(options) == 1:
+            selected = options[0]
         return (
             gr.update(visible=False),
             gr.update(visible=True),
-            f"### Welcome, {profile['first_name']}\n{profile['masked_customer_id']} · {profile['membership'].title()} membership · Session active",
-            gr.update(choices=options, value=options[0] if len(options) == 1 else None),
+            f"### Welcome, {profile['first_name']}\n{profile['membership'].title()} membership · {profile['masked_customer_id']} · Signed in",
+            gr.update(choices=options, value=selected),
+            restored.get("messages", []),
+            *proposal_controls(restored.get("pending_action")),
         )
     except (BankError, httpx.HTTPError):
-        return gr.update(visible=True), gr.update(visible=False), "", gr.update(choices=[], value=None)
+        return (
+            gr.update(visible=True),
+            gr.update(visible=False),
+            "",
+            gr.update(choices=[], value=None),
+            [],
+            *proposal_controls(None),
+        )
 
 
 def display(result, history):
@@ -56,25 +99,52 @@ def display(result, history):
                 t["status"],
             ]
         )
-    pending = result.get("pending_action")
-    summary = pending["summary"] if pending else "No action awaiting confirmation."
     reference = result.get("download_reference")
     download = (
-        f'<a href="/ui/statement/{reference}" target="_blank" rel="noopener">Download your statement (expires in 5 minutes)</a>'
+        f'<a class="statement-link" href="/ui/statement/{reference}" target="_blank" rel="noopener">Download statement <span>CSV · Available for 5 minutes</span></a>'
         if reference
         else ""
     )
-    return history, "", summary, rows, download, "Request complete · " + ", ".join(result.get("agents", []))
+    summary, card, confirm, otp, status = proposal_controls(result.get("pending_action"))
+    return (
+        history,
+        "",
+        summary,
+        rows,
+        download,
+        "Review your proposal below" if result.get("pending_action") else "Ready for your next question",
+        card,
+        gr.update(visible=bool(rows or reference)),
+        confirm,
+        otp,
+        status,
+    )
+
+
+def transient(history, activity):
+    # A failed/empty request must not erase a proposal or hide a pending OTP.
+    return (
+        history,
+        "",
+        gr.skip(),
+        gr.skip(),
+        gr.skip(),
+        activity,
+        gr.skip(),
+        gr.skip(),
+        gr.skip(),
+        gr.skip(),
+        gr.skip(),
+    )
 
 
 async def send(message, history, account, request: gr.Request):
     history = history or []
     if not message.strip():
-        yield history, "", "No action awaiting confirmation.", [], "", "Enter a question to get started."
+        yield transient(history, "Type a question or choose a quick action.")
         return
-    sanitized = redact(message)
-    history = history + [{"role": "user", "content": sanitized}]
-    yield history, "", "Preparing your request…", [], "", "Understanding your request · Verifying permissions"
+    history = history + [{"role": "user", "content": redact(message)}]
+    yield transient(history, "Checking your request and permissions…")
     try:
         key, session = bff.get_session(cookies(request))
         selected = session["account_map"].get(account)
@@ -104,23 +174,15 @@ async def send(message, history, account, request: gr.Request):
                         elif event == "error":
                             raise BankError("CHAT_ERROR", data.get("safe_message", "Please try again."))
     except BankError as exc:
-        yield (
+        yield transient(
             history + [{"role": "assistant", "content": exc.payload.safe_message}],
-            "",
-            "No new action was submitted.",
-            [],
-            "",
-            "Request could not be completed",
+            "Your request could not be completed.",
         )
     except Exception:
-        yield (
+        yield transient(
             history
             + [{"role": "assistant", "content": "The banking service is unavailable. Please try again."}],
-            "",
-            "",
-            [],
-            "",
-            "Service unavailable",
+            "Service temporarily unavailable",
         )
 
 
@@ -128,11 +190,11 @@ async def confirm(request: gr.Request):
     try:
         _, session = bff.get_session(cookies(request))
         if not session["chat_id"]:
-            return "Prepare a request first.", gr.update(visible=False)
+            return "Prepare a request first.", gr.update(visible=False), gr.update(interactive=False)
         result = (await bff.api(cookies(request), "POST", f"/chat/{session['chat_id']}/confirm")).json()
-        return result["message"], gr.update(visible=True)
+        return result["message"], gr.update(visible=True), gr.update(interactive=False)
     except BankError as exc:
-        return exc.payload.safe_message, gr.update(visible=False)
+        return exc.payload.safe_message, gr.skip(), gr.skip()
 
 
 async def verify(otp, history, request: gr.Request):
@@ -143,12 +205,17 @@ async def verify(otp, history, request: gr.Request):
                 cookies(request), "POST", f"/chat/{session['chat_id']}/verify-otp", json={"otp": otp}
             )
         ).json()
+        pending = result.get("pending_action")
+        summary, card, button, panel, status = proposal_controls(pending)
         return (
             "",
             history + [{"role": "assistant", "content": result["response"]}],
-            "Verification complete. " + result["response"],
-            gr.update(visible=False),
-            "No action awaiting confirmation.",
+            status,
+            panel,
+            summary,
+            card,
+            button,
+            "Submission needs another attempt" if pending else "Request submitted successfully",
         )
     except BankError as exc:
         return (
@@ -156,7 +223,10 @@ async def verify(otp, history, request: gr.Request):
             history,
             exc.payload.safe_message,
             gr.update(visible=True),
-            "Your request has not been submitted.",
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            "Check the verification code and try again.",
         )
 
 
@@ -166,11 +236,13 @@ async def cancel(history, request: gr.Request):
         result = (await bff.api(cookies(request), "POST", f"/chat/{session['chat_id']}/cancel")).json()
         return (
             history + [{"role": "assistant", "content": result["response"]}],
-            "No action awaiting confirmation.",
+            "",
             gr.update(visible=False),
+            gr.update(visible=False),
+            "Proposal cancelled",
         )
     except BankError as exc:
-        return history, exc.payload.safe_message, gr.update(visible=False)
+        return history, exc.payload.safe_message, gr.skip(), gr.skip(), "Unable to cancel this proposal."
 
 
 async def clear(request: gr.Request):
@@ -181,7 +253,19 @@ async def clear(request: gr.Request):
         session["chat_id"] = None
         session["download_reference"] = None
         bff.save(key, session)
-        return [], "No action awaiting confirmation.", [], "", gr.update(visible=False)
+        return (
+            [],
+            "",
+            "",
+            [],
+            "",
+            "Ready to help",
+            gr.update(visible=False),
+            gr.update(visible=False),
+            gr.update(interactive=False),
+            gr.update(visible=False),
+            "",
+        )
     except BankError as exc:
         raise gr.Error(exc.payload.safe_message) from None
 
@@ -189,94 +273,135 @@ async def clear(request: gr.Request):
 def create_gradio_app():
     with gr.Blocks(title="SecureBank Agent", analytics_enabled=False, fill_width=True) as demo:
         gr.HTML(
-            '<div id="brand"><h1>SecureBank Agent</h1><p>Your banking assistant. Clear answers. You stay in control.</p></div>'
-        )
-        gr.Markdown(
-            "**Development simulation · Synthetic accounts only · No money transfers**",
-            elem_id="security-banner",
+            '<header id="brand"><div class="brand-mark" aria-hidden="true">S</div><div><h1>SecureBank<span>Agent</span></h1><p>Everyday banking, made simpler.</p></div><span class="demo-badge">SYNTHETIC DEMO</span></header>'
         )
         with gr.Column(elem_id="login-card") as login_panel:
-            gr.Markdown("## Welcome back\nSign in to explore your synthetic banking dashboard.")
-            selector = gr.Dropdown(
-                choices=[f"demo{i:02}" for i in range(1, 13)], value="demo01", label="Demo customer"
+            gr.HTML(
+                '<div class="login-heading"><span class="eyebrow">YOUR BANKING SPACE</span><h2>Welcome back.</h2><p>Sign in to check your accounts and manage requests in one conversation.</p></div>'
             )
-            username = gr.Textbox(value="demo01", label="Username")
-            password = gr.Textbox(type="password", label="Password")
-            login_button = gr.Button("Sign in securely", variant="primary")
+            username = gr.Textbox(value="demo01", label="Username", elem_classes=["bank-field"])
+            password = gr.Textbox(type="password", label="Password", elem_classes=["bank-field"])
+            login_button = gr.Button("Sign in securely", variant="primary", elem_id="login-submit")
             login_status = gr.Markdown("")
+            with gr.Accordion("Try a demo account", open=True, elem_id="demo-users"):
+                selector = gr.Dropdown(
+                    choices=[f"demo{i:02}" for i in range(1, 13)], value="demo01", label="Demo customer"
+                )
+                gr.Markdown(
+                    "Password: **`SyntheticDemo!42`**\n\n`demo01`–`demo10`: customers · `demo11`: support · `demo12`: administrator"
+                )
             gr.Markdown(
-                "Demo password: `SyntheticDemo!42`\n\nCustomers: demo01–demo10. Support: demo11. Administrator: demo12. Employee roles have no customer-account access. This built-in login is development-only."
+                "Development login only. All balances, accounts, and verification codes are synthetic.",
+                elem_classes=["quiet-note"],
             )
-        with gr.Column(visible=False) as dashboard:
-            with gr.Row():
-                profile = gr.Markdown("")
-                logout = gr.Button("Sign out", size="sm")
-                clear_button = gr.Button("Clear conversation", size="sm")
-            with gr.Row():
-                with gr.Column(scale=1, min_width=240, elem_id="account-card"):
-                    gr.Markdown("### Your accounts")
-                    account = gr.Dropdown(choices=[], label="Select an account")
-                    gr.Markdown("### How can I help?")
-                    suggestions = []
-                    for label, text in [
-                        ("Check my balance", "What is my balance?"),
-                        ("Last five transactions", "Show my last five transactions"),
-                        ("Generate a statement", "Generate my statement"),
-                        ("Request a checkbook", "Request a checkbook"),
-                        ("Report a transaction", "Report suspicious transaction 1"),
-                        ("Increase credit limit", "Increase my credit limit"),
-                        ("Service request status", "Check service request status"),
-                        ("Explain bank charges", "Explain bank charges"),
-                    ]:
-                        suggestions.append((gr.Button(label, size="sm"), text))
-                with gr.Column(scale=3):
-                    chatbot = gr.Chatbot(label="Secure conversation", height=430, elem_id="chat-window")
-                    activity = gr.Markdown("Ready to help", elem_id="activity")
-                    message = gr.Textbox(
-                        label="Message",
-                        placeholder="Show my balance and last five transactions",
-                        lines=2,
-                        max_lines=4,
+        with gr.Column(visible=False, elem_id="dashboard") as dashboard:
+            with gr.Row(elem_id="session-bar"):
+                with gr.Column(scale=3, min_width=200):
+                    profile = gr.Markdown("", elem_id="customer-profile")
+                with gr.Column(scale=1, min_width=200):
+                    with gr.Row(elem_id="session-actions"):
+                        clear_button = gr.Button("Clear conversation", size="sm", min_width=100)
+                        logout = gr.Button("Sign out", size="sm", min_width=80)
+            with gr.Row(elem_id="account-bar"):
+                with gr.Column(scale=1, min_width=240):
+                    account = gr.Dropdown(
+                        choices=[], label="Select an account", elem_id="account-select", filterable=False
                     )
-                    with gr.Row():
-                        send_button = gr.Button("Send message", variant="primary")
-                        stop_button = gr.Button("Stop response")
+                with gr.Column(scale=2, min_width=200):
                     gr.Markdown(
-                        "Keep passwords, PINs, card numbers, and OTPs out of chat. Use only demo data."
+                        "**Your accounts, your control**\nChoose an account for balances and transactions. Requests always need your review.",
+                        elem_id="account-help",
                     )
-            with gr.Accordion("Transaction details", open=True):
+            with gr.Accordion("Quick actions", open=False, elem_id="quick-actions"):
+                suggestions = []
+                options = [
+                    ("Check my balance", "What is my balance?"),
+                    ("Last five transactions", "Show my last five transactions"),
+                    ("Generate a statement", "Generate my statement"),
+                    ("Request a checkbook", "Request a checkbook"),
+                    ("Report a transaction", "Report suspicious transaction 1"),
+                    ("Increase credit limit", "Increase my credit limit"),
+                    ("Service request status", "Check service request status"),
+                    ("Explain bank charges", "Explain bank charges"),
+                ]
+                for start in (0, 4):
+                    with gr.Row():
+                        for label, text in options[start : start + 4]:
+                            suggestions.append((gr.Button(label, size="sm", min_width=130), text))
+            with gr.Column(elem_id="conversation-card"):
+                gr.Markdown("### Banking assistant", elem_id="chat-heading")
+                chatbot = gr.Chatbot(
+                    label="Secure conversation",
+                    show_label=False,
+                    height=380,
+                    elem_id="chat-window",
+                    placeholder='<div class="chat-welcome"><span class="welcome-symbol" aria-hidden="true">✦</span><h3>How can I help today?</h3><p>Ask about a balance, explore your recent transactions,<br>or start a service request.</p><small>Try “Show my balance and last five transactions.”</small></div>',
+                )
+                activity = gr.Markdown("Ready to help", elem_id="activity")
+                message = gr.Textbox(
+                    label="Message",
+                    show_label=False,
+                    placeholder="Ask a banking question…",
+                    lines=2,
+                    max_lines=4,
+                    elem_id="message-input",
+                    container=False,
+                )
+                with gr.Row(elem_id="composer-actions"):
+                    send_button = gr.Button("Send message", variant="primary", scale=2, min_width=140)
+                    stop_button = gr.Button("Stop response", scale=1, min_width=100)
+                gr.Markdown(
+                    "Keep passwords and OTPs out of chat. Enter verification codes only in the separate field.",
+                    elem_classes=["quiet-note"],
+                )
+            with gr.Accordion(
+                "Transaction details & statements", open=True, visible=False, elem_id="transaction-panel"
+            ) as transaction_panel:
                 table = gr.Dataframe(
                     headers=["Date", "Description", "Type", "Reference", "Debit", "Credit", "Status"],
                     datatype=["str"] * 7,
                     interactive=False,
+                    elem_id="transaction-table",
                 )
                 download = gr.HTML("")
-            with gr.Column(elem_id="action-card"):
+            with gr.Column(visible=False, elem_id="action-card") as action_card:
                 gr.Markdown(
-                    "### Review before submitting\nConfirmation and a separate verification code are required. Credit increases and disputes go to human review."
+                    "### Review your request\nCheck the details before confirming. Nothing is submitted until you verify the code."
                 )
-                proposal = gr.Markdown("No action awaiting confirmation.")
-                with gr.Row():
-                    confirm_button = gr.Button("Confirm proposal", variant="primary")
+                proposal = gr.Markdown("")
+                with gr.Row(elem_id="proposal-actions"):
+                    confirm_button = gr.Button("Confirm proposal", variant="primary", interactive=False)
                     cancel_button = gr.Button("Cancel proposal")
                 otp_status = gr.Markdown("")
-                with gr.Column(visible=False) as otp_panel:
+                with gr.Column(visible=False, elem_id="otp-panel") as otp_panel:
                     otp = gr.Textbox(label="Development verification code", type="password", max_lines=1)
-                    verify_button = gr.Button("Verify and submit")
-        # Only non-sensitive presentation state; credentials live in the server-side BFF vault.
+                    verify_button = gr.Button("Verify and submit", variant="primary")
+        gr.Markdown("Synthetic banking demo · No real accounts or money transfers", elem_id="security-banner")
         gr.State(value={"theme": "banking"})
         selector.change(lambda value: value, inputs=[selector], outputs=[username], api_visibility="private")
         login_button.click(
             fn=None,
             inputs=[username, password],
             outputs=[login_status, password],
-            js="""async (username,password) => {const r=await fetch('/ui/login',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({username,password})}); const d=await r.json(); if(r.ok){window.location.reload();return ['Signed in.',''];} return [d.safe_message||'Sign-in failed.',''];}""",
+            js="""async (username,password) => {try {const r=await fetch('/ui/login',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({username,password})}); const d=await r.json(); if(r.ok){window.location.reload();return ['Signed in.',''];} return [d.safe_message||'Sign-in failed.',''];}catch{return ['Unable to connect. Please try again.',''];}}""",
         )
         logout.click(
             fn=None,
-            js="""async()=>{await fetch('/ui/logout',{method:'POST',credentials:'same-origin'});window.location.reload();}""",
+            js="""async()=>{try{await fetch('/ui/logout',{method:'POST',credentials:'same-origin'});}finally{window.location.reload();}}""",
         )
-        outputs = [chatbot, message, proposal, table, download, activity]
+        outputs = [
+            chatbot,
+            message,
+            proposal,
+            table,
+            download,
+            activity,
+            action_card,
+            transaction_panel,
+            confirm_button,
+            otp_panel,
+            otp_status,
+        ]
         send_event = send_button.click(
             send, inputs=[message, chatbot, account], outputs=outputs, api_visibility="private"
         )
@@ -286,20 +411,38 @@ def create_gradio_app():
         stop_button.click(fn=None, cancels=[send_event, enter_event])
         for button, text in suggestions:
             button.click(lambda value=text: value, outputs=[message], api_visibility="private")
-        confirm_button.click(confirm, outputs=[otp_status, otp_panel], api_visibility="private")
+        confirm_button.click(
+            confirm, outputs=[otp_status, otp_panel, confirm_button], api_visibility="private"
+        )
         verify_button.click(
             verify,
             inputs=[otp, chatbot],
-            outputs=[otp, chatbot, otp_status, otp_panel, proposal],
+            outputs=[otp, chatbot, otp_status, otp_panel, proposal, action_card, confirm_button, activity],
             api_visibility="private",
         )
         cancel_button.click(
-            cancel, inputs=[chatbot], outputs=[chatbot, proposal, otp_panel], api_visibility="private"
+            cancel,
+            inputs=[chatbot],
+            outputs=[chatbot, proposal, otp_panel, action_card, activity],
+            api_visibility="private",
         )
-        clear_button.click(
-            clear, outputs=[chatbot, proposal, table, download, otp_panel], api_visibility="private"
+        clear_button.click(clear, outputs=outputs, api_visibility="private")
+        demo.load(
+            bootstrap,
+            outputs=[
+                login_panel,
+                dashboard,
+                profile,
+                account,
+                chatbot,
+                proposal,
+                action_card,
+                confirm_button,
+                otp_panel,
+                otp_status,
+            ],
+            api_visibility="private",
         )
-        demo.load(bootstrap, outputs=[login_panel, dashboard, profile, account], api_visibility="private")
     return demo
 
 
@@ -368,6 +511,12 @@ def mount_ui(app):
             neutral_hue="slate",
             font=["system-ui", "sans-serif"],
             font_mono=["ui-monospace", "monospace"],
+        ).set(
+            block_label_background_fill="transparent",
+            block_label_text_color="#5d6d7b",
+            block_background_fill="white",
+            button_primary_background_fill="#0b756d",
+            button_primary_background_fill_hover="#095f59",
         ),
         css=css,
         show_error=False,
