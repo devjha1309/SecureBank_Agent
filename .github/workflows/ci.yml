@@ -1,0 +1,56 @@
+name: SecureBank release gates
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    env:
+      MODEL_PROVIDER: mock
+      ALLOW_EXTERNAL_LLM: "false"
+      MOUNT_UI: "false"
+      GRADIO_ANALYTICS_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: make lint typecheck
+      - run: python -m pytest -q --junitxml=evaluations/reports/tests.xml
+      - run: python -m evaluations.evaluators.run
+      - run: python scripts/secret_scan.py
+      - run: pip-audit -r requirements.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evaluation-results
+          path: evaluations/reports/
+  containers:
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install python-dotenv httpx
+      - run: python scripts/init_env.py
+      - run: docker compose config --quiet
+      - run: docker compose up --build -d --wait --wait-timeout 240
+      - name: Full HTTP and MCP smoke test
+        env:
+          BANKING_API_URL: http://127.0.0.1:8200
+        run: python scripts/smoke.py
+      - name: Browser acceptance
+        env:
+          BANKING_API_URL: http://127.0.0.1:8200
+        run: |
+          pip install playwright==1.62.0
+          python -m playwright install --with-deps chromium
+          python scripts/browser_smoke.py
+      - if: always()
+        run: docker compose down

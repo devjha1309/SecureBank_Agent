@@ -1,0 +1,135 @@
+x-mcp: &mcp
+  build:
+    context: .
+    dockerfile: infrastructure/docker/Dockerfile
+  restart: unless-stopped
+  environment:
+    BANKING_API_URL: http://backend:8000
+    GRADIO_ANALYTICS_ENABLED: "false"
+  networks: [banking]
+  depends_on:
+    backend:
+      condition: service_healthy
+  read_only: true
+  tmpfs: [/tmp]
+  security_opt: [no-new-privileges:true]
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: securebank
+      POSTGRES_USER: securebank
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run python scripts/init_env.py}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    networks: [banking]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U securebank -d securebank"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7.4-alpine
+    command: [redis-server, --appendonly, "yes"]
+    volumes: [redis_data:/data]
+    networks: [banking]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  backend:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
+    command: [sh, -c, "python -m alembic upgrade head && python -m mock_bank.seed_data.seed && python -m uvicorn apps.banking_api.main:app --host 0.0.0.0 --port 8000 --no-access-log"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://securebank:${POSTGRES_PASSWORD}@postgres:5432/securebank
+      CHECKPOINT_URL: postgresql://securebank:${POSTGRES_PASSWORD}@postgres:5432/securebank
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:?Run python scripts/init_env.py}
+      MODEL_PROVIDER: mock
+      ALLOW_EXTERNAL_LLM: "false"
+      DEMO_OTP: "true"
+      BANKING_API_URL: http://127.0.0.1:8000
+      ACCOUNTS_MCP_URL: http://accounts-mcp:8101/mcp
+      TRANSACTIONS_MCP_URL: http://transactions-mcp:8102/mcp
+      SERVICES_MCP_URL: http://services-mcp:8103/mcp
+      KNOWLEDGE_MCP_URL: http://knowledge-mcp:8104/mcp
+      GRADIO_ANALYTICS_ENABLED: "false"
+    ports: ["127.0.0.1:${PORT:-8200}:8000"]
+    volumes: [app_private:/app/.local]
+    networks: [banking, edge]
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+  accounts-mcp:
+    <<: *mcp
+    command: [python, -m, uvicorn, mcp_servers.accounts_server.app:app, --host, 0.0.0.0, --port, "8101", --no-access-log]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8101/health')"]
+      interval: 10s
+      retries: 5
+  transactions-mcp:
+    <<: *mcp
+    command: [python, -m, uvicorn, mcp_servers.transactions_server.app:app, --host, 0.0.0.0, --port, "8102", --no-access-log]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8102/health')"]
+      interval: 10s
+      retries: 5
+  services-mcp:
+    <<: *mcp
+    command: [python, -m, uvicorn, mcp_servers.services_server.app:app, --host, 0.0.0.0, --port, "8103", --no-access-log]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8103/health')"]
+      interval: 10s
+      retries: 5
+  knowledge-mcp:
+    <<: *mcp
+    command: [python, -m, uvicorn, mcp_servers.knowledge_server.app:app, --host, 0.0.0.0, --port, "8104", --no-access-log]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8104/health')"]
+      interval: 10s
+      retries: 5
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    volumes:
+      - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks: [banking]
+    restart: unless-stopped
+  grafana:
+    image: grafana/grafana:11.6.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?Run python scripts/init_env.py}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./infrastructure/monitoring/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/monitoring/dashboard.json:/var/lib/grafana/dashboards/securebank.json:ro
+      - grafana_data:/var/lib/grafana
+    ports: ["127.0.0.1:${GRAFANA_PORT:-3000}:3000"]
+    networks: [banking, edge]
+    restart: unless-stopped
+    depends_on: [prometheus]
+networks:
+  banking:
+    internal: true
+  edge: {}
+volumes:
+  postgres_data: {}
+  redis_data: {}
+  app_private: {}
+  prometheus_data: {}
+  grafana_data: {}
